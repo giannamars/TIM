@@ -1,3 +1,9 @@
+module ThermoStoich
+
+using LinearAlgebra
+
+export extract_composition, get_lambda
+
 function extract_composition(elementstring::String)
     # (C,H,N,O,S,P)
     regexes = [r"[C]\d*", r"[H]\d*", r"[N]\d*", r"[O]\d*", r"[S]\d*", r"[P]\d*"]
@@ -122,7 +128,7 @@ function get_lambda(elementstring::String, chemFormBiom)
     # - estimate delGf0 for electron donor
     delGf0_D_zero = 0
     delGf0_zero = [delGf0_D_zero, -237.2, -586.8, -79.3, -1096.1, 12.1, 0, 0, 16.4, -67]
-    delGcox0_zero = dot(delGf0_zero, stoich_electron_donor)
+    delGcox0_zero = LinearAlgebra.dot(delGf0_zero, stoich_electron_donor)
     delGf0_D_est = (delGcox0-delGcox0_zero)/stoich_electron_donor[1]
     # - finally, delGf0
     delGf0 = delGf0_zero
@@ -181,93 +187,4 @@ function get_lambda(elementstring::String, chemFormBiom)
     return [lambda_O2, lambda_HCO3], [delGcox0PerC,delGcox0,delGcox,delGcat0,delGcat,delGan0_O2,delGan0_HCO3, delGan_O2,delGan_HCO3,delGdis_O2,delGdis_HCO3], [m_O2, m_HCO3], stoichMet_O2, stoichMet_HCO3
 end
 
-
-function get_lambda(elementstring::String, chemFormBiom, V_c, Min_gen_time, Gram_stain, ρ_p)
-    chemical_indices = extract_composition(elementstring)
-    stoich_electron_donor = get_stoich_electron_donor(elementstring)
-    stoich_cat_rxns = get_stoich_catabolic_reaction(elementstring)
-    stoich_anabolic_O2, stoich_anabolic_HCO3 = get_stoich_anabolic_reaction(elementstring, chemFormBiom)
-
-    a = chemical_indices[1] #C
-    b = chemical_indices[2] #H
-    c = chemical_indices[3] #N
-    d = chemical_indices[4] #O
-    e = chemical_indices[5] #S
-    f = chemical_indices[6] #P
-    z = 0
-
-    ne = -z+4*a+b-3*c-2*d+5*e-2*f  # number of electrons transferred in D
-    nosc = -(ne/a) + 4
-    delGcox0PerC = 60.3-28.5*nosc  # kJ/C-mol
-    delGcox0 = delGcox0PerC*a*abs(stoich_electron_donor[1])
-    # - estimate delGf0 for electron donor
-    delGf0_D_zero = 0
-    delGf0_zero = [delGf0_D_zero, -237.2, -586.8, -79.3, -1096.1, 12.1, 0, 0, 16.4, -67]
-    delGcox0_zero = dot(delGf0_zero, stoich_electron_donor)
-    delGf0_D_est = (delGcox0-delGcox0_zero)/stoich_electron_donor[1]
-    # - finally, delGf0
-    delGf0 = delGf0_zero
-    delGf0[1] = delGf0_D_est
-
-    # - standard delG at pH=0
-    delGcat0 = dot(delGf0, stoich_cat_rxns)
-    delGan0_O2 = dot(delGf0, stoich_anabolic_O2)
-    delGan0_HCO3 = dot(delGf0, stoich_anabolic_HCO3)
-
-    # - stadard delG at pH=7
-    R = 0.008314  # kJ/(K.mol)
-    T = 298  # K
-    iProton = 7  # [eD,h2o,hco3-,nh4+,hpo4**2-,hs-,h+,e-,eA,biom]
-    delGcox = delGcox0+R*T*stoich_electron_donor[iProton]*log(1e-7)
-    delGcat = delGcat0+R*T*stoich_cat_rxns[iProton]*log(1e-7)
-    delGan_O2 = delGan0_O2+R*T*stoich_anabolic_O2[iProton]*log(1e-7)
-    delGan_HCO3 = delGan0_HCO3+R*T*stoich_anabolic_HCO3[iProton]*log(1e-7)
-
-
-    # The Thermodynamic Electron Equivalents Model (TEEM)
-    # --------
-    eta = 0.43
-    #
-    r_p = 1e-9
-    N_A = 6.022e23
-    r_c = (3*V_c/(4*pi)).^(1/3)   # cell radius
-    gmax = log(2)./Min_gen_time
-    N_p = @. 4*ρ_p*r_c^2/r_p^2
-    N_SB = transporter_density_to_monomer_uptake_sites(V_c, ρ_p*ones(1,1), Min_gen_time, Gram_stain)[1]
-    delG_porter = @. 1.09e-19*60^2*gmax*N_SB*N_A/1e3*6 # kJ/mol.X
-
-    delGsyn = 4.18 + delG_porter[1]  # kJ/(mol.X)
-    #delGsyn = 200.0 + delG_porter[1]  # kJ/(mol.X)
-
-    if delGan_O2 < 0
-        m_O2 = 1
-    else
-        m_O2 = -1
-    end
-
-    if delGan_HCO3 < 0
-        m_HCO3 = 1
-    else
-        m_HCO3 = -1
-    end
-
-    lambda_O2 = (delGan_O2*eta^m_O2+delGsyn)/(-delGcat*eta)
-    lambda_HCO3 = (delGan_HCO3*eta^m_HCO3+delGsyn)/(-delGcat*eta)
-
-    if lambda_O2 > 0
-        stoichMet_O2 = lambda_O2*stoich_cat_rxns+stoich_anabolic_O2
-    else
-        stoichMet_O2 = stoich_anabolic_O2
-    end
-
-    if lambda_HCO3 > 0
-        stoichMet_HCO3 = lambda_HCO3*stoich_cat_rxns+stoich_anabolic_HCO3
-    else
-        stoichMet_HCO3 = stoich_anabolic_HCO3
-    end
-
-    delGdis_O2 = dot(delGf0,stoichMet_O2) + R*T*stoichMet_O2[iProton]*log(1e-7)
-    delGdis_HCO3 = dot(delGf0,stoichMet_HCO3) + R*T*stoichMet_HCO3[iProton]*log(1e-7)
-
-    return [lambda_O2, lambda_HCO3], [delGcox0PerC,delGcox0,delGcox,delGcat0,delGcat,delGan0_O2,delGan0_HCO3, delGan_O2,delGan_HCO3,delGdis_O2,delGdis_HCO3], [m_O2, m_HCO3], stoichMet_O2, stoichMet_HCO3
-end
+end # module
